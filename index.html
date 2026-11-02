@@ -1,0 +1,148 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leoins moving pattern</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { overflow-x: hidden; background: #faf7f1; }
+    .pattern {
+      --tile: clamp(120px, 18vw, 240px);
+      --shake: 0px;
+      --tilt: 0deg;
+      display: grid;
+      gap: clamp(24px, 5vh, 56px);
+      padding-block: 48px;
+      overflow: hidden;
+    }
+    .row { height: calc(var(--tile) * 1.18); }
+    .track {
+      display: flex;
+      width: max-content;
+      margin-left: calc(-1 * var(--tile));
+      animation: march 5s linear infinite;
+    }
+    .row:nth-child(even) .track { animation-direction: reverse; }
+    .leo {
+      display: block;
+      flex: 0 0 var(--tile);
+      width: var(--tile);
+      animation: shake 110ms steps(2, end) infinite;
+      animation-delay: var(--phase);
+    }
+    .leo img { display: block; width: 100%; height: auto; }
+    #flight-layer { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+    .flying-leo { position: absolute; will-change: transform; }
+    .gone .track { visibility: hidden; animation: none; }
+    .gone .leo { animation: none; }
+    @keyframes march { to { transform: translateX(calc(-1 * var(--tile))); } }
+    @keyframes shake {
+      0%, 100% { transform: translate(calc(-1 * var(--shake)), var(--shake)) rotate(calc(-1 * var(--tilt))); }
+      25% { transform: translate(var(--shake), calc(-1 * var(--shake))) rotate(var(--tilt)); }
+      50% { transform: translate(calc(-.5 * var(--shake)), calc(-1 * var(--shake))) rotate(calc(-1 * var(--tilt))); }
+      75% { transform: translate(var(--shake), calc(.5 * var(--shake))) rotate(var(--tilt)); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .track, .leo { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="pattern" role="img" aria-label="Thirty-six rows of Leoins moving in alternating directions. Scroll to make them shake, then watch them jump and tumble away at the bottom."></main>
+  <div id="flight-layer" aria-hidden="true"></div>
+  <script>
+    const pattern = document.querySelector('.pattern');
+    const flightLayer = document.querySelector('#flight-layer');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    let stage = 'scrolling';
+    let pendingFrame = false;
+
+    function fillRows() {
+      if (stage !== 'scrolling') return;
+      // Measure the responsive tile size directly so every screen stays covered.
+      const probe = document.createElement('div');
+      probe.style.width = 'var(--tile)';
+      pattern.append(probe);
+      const tileWidth = probe.getBoundingClientRect().width;
+      probe.remove();
+      const count = Math.ceil(window.innerWidth / tileWidth) + 4;
+      pattern.replaceChildren();
+      for (let rowIndex = 0; rowIndex < 36; rowIndex++) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.setAttribute('aria-hidden', 'true');
+        const track = document.createElement('div');
+        track.className = 'track';
+        for (let i = 0; i < count; i++) {
+          const leo = document.createElement('span');
+          leo.className = 'leo';
+          leo.style.setProperty('--phase', `${-Math.random()}s`);
+          const img = document.createElement('img');
+          img.src = './leoins.png';
+          img.alt = '';
+          img.draggable = false;
+          leo.append(img);
+          track.append(leo);
+        }
+        row.append(track);
+        pattern.append(row);
+      }
+    }
+
+    function launchEveryone() {
+      if (stage !== 'charging') return;
+      stage = 'flying';
+      // Capture visible characters before hiding every original, including off-screen rows.
+      const visible = [...pattern.querySelectorAll('img')].map(img => ({
+        img, rect: img.getBoundingClientRect()
+      })).filter(({rect}) => rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth);
+      pattern.classList.add('gone');
+      pattern.setAttribute('aria-label', 'All the Leoins have jumped away.');
+      if (reducedMotion.matches) { stage = 'gone'; return; }
+      const flights = visible.map(({img, rect}) => {
+        const copy = img.cloneNode();
+        copy.className = 'flying-leo';
+        Object.assign(copy.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+        flightLayer.append(copy);
+        const duration = 1400 + Math.random() * 600;
+        const lift = 320 + Math.random() * 320;
+        const drift = (Math.random() - .5) * 850;
+        const spin = (Math.random() < .5 ? -1 : 1) * (400 + Math.random() * 600);
+        const fall = innerHeight - rect.top + rect.height + 200;
+        // A ballistic arc: fast launch, a brief peak, then an accelerating fall.
+        const frames = Array.from({length: 61}, (_, i) => {
+          const t = i / 60;
+          const y = -4 * lift * t * (1 - t) + fall * t * t;
+          return { offset: t, transform: `translate(${drift * t}px, ${y}px) rotate(${spin * t}deg) scale(${1 + .12 * Math.sin(Math.PI * t)})` };
+        });
+        return copy.animate(frames, {duration, easing: 'linear', fill: 'forwards'}).finished.then(() => copy.remove());
+      });
+      Promise.all(flights).then(() => { stage = 'gone'; flightLayer.replaceChildren(); });
+    }
+
+    function updateScroll() {
+      pendingFrame = false;
+      if (stage !== 'scrolling') return;
+      const maxScroll = document.documentElement.scrollHeight - innerHeight;
+      const progress = Math.max(0, Math.min(1, scrollY / Math.max(1, maxScroll)));
+      pattern.style.setProperty('--shake', `${progress * progress * 12}px`);
+      pattern.style.setProperty('--tilt', `${progress * progress * 9}deg`);
+      if (maxScroll > 0 && scrollY >= maxScroll - 8) {
+        stage = 'charging';
+        pattern.style.setProperty('--shake', '25px');
+        pattern.style.setProperty('--tilt', '19deg');
+        setTimeout(launchEveryone, reducedMotion.matches ? 0 : 1600);
+      }
+    }
+    addEventListener('scroll', () => {
+      if (!pendingFrame) { pendingFrame = true; requestAnimationFrame(updateScroll); }
+    }, {passive: true});
+    addEventListener('resize', () => { fillRows(); updateScroll(); });
+    fillRows();
+    updateScroll();
+  </script>
+</body>
+</html>
+
